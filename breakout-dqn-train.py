@@ -238,15 +238,18 @@ class Agent:
             callbacks=[])
 
 class ThreadedAgent(Thread, Agent):
+    # extends the Agent to run the training in a background thread
     def __init__(self, env):
         Thread.__init__(self)
         Agent.__init__(self, env)
 
-        self.train_queue = Queue(maxsize=32)
+        self.train_queue = Queue(maxsize=TRAINING_QUEUE_LENGTH)
 
         self.thread_model()
 
+    # set up the keras model to work with threads
     def thread_model(self):
+        # these are normally run lazily, this create problems with threads
         self.model._make_predict_function()
         self.model._make_train_function()
         self.graph = tf.get_default_graph()
