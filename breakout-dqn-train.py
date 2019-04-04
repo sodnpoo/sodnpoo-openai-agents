@@ -9,15 +9,28 @@ import cv2
 import random
 import time
 
-#single threaded breakout DQN
+# imports for multithreading
+from threading import Thread
+from queue import Queue
+import tensorflow as tf
 
-EPISODES = 10000
-MEMORY_FRAMES = 8
-FORCE_FIRE = True   # force the fire button to be pressed after dying if the model doesn't
-DEBUG = False       # set to True for lots of debug output
-MODEL_FILENAME = "dqn.%d.model.h5" % time.time() # filename to save the model to
+##### breakout DQN
+
+EPISODES = 10000            # number of episodes to play
+MEMORY_FRAMES = 8           # number of frames to stack
+REPLAY_MEMORY = 20000       # amount of moves to remember in the replay memory
+                            # 20k will use ~4GB RAM
+FORCE_FIRE = True           # force the fire button to be pressed after dying
+                            # if the model doesn't
+DEBUG = False               # set to True for lots of debug output
+MODEL_FILENAME = "dqn.%d.model.h5" % time.time()
+                            # filename to save the model to
 SAVE_EVERY_EPISODE = 100    # save the model every 100 episodes
 RENDER = True               # render the Atari window
+MULTITHREADING = True       # use a background thread to do the training
+                            # this will be faster, but you'll need to double
+                            # CTRL+C to quit
+TRAINING_QUEUE_LENGTH = 32  # size of the batch fifo buffer
 
 class Agent:
     def __init__(self, env):
@@ -41,7 +54,7 @@ class Agent:
         # epsilon decay multiplier
         self.epsilon_decay = 0.9999
         # minimum amount of replay memory before we start to decay the epsilon
-        self.epsilon_decay_min_memory = 20000
+        self.epsilon_decay_min_memory = REPLAY_MEMORY
         # minimum epsilon value
         self.epsilon_min = 0.1
 
@@ -49,13 +62,13 @@ class Agent:
         self.batch_size = 32
 
         # minimum amount of replay memory before we start training
-        self.min_training_memory = 20000
+        self.min_training_memory = REPLAY_MEMORY
 
         # replay memory
         # should be a deque but sampling a deque is slow
         self.memory = []
         # number previous moves to remember
-        self.max_memory = 20000
+        self.max_memory = REPLAY_MEMORY
 
         # build model
         self.model = self.build_model()
@@ -77,6 +90,9 @@ class Agent:
     # take the tail end of the replay memory
     def tail_memory(self):
         self.memory = self.memory[-self.max_memory:]
+
+    def memory_length(self):
+        return len(self.memory)
 
     # save sample to the replay memory
     def append_sample(self, state, action, reward, next_state, done, dead):
@@ -221,12 +237,45 @@ class Agent:
             verbose=0,
             callbacks=[])
 
+class ThreadedAgent(Thread, Agent):
+    def __init__(self, env):
+        Thread.__init__(self)
+        Agent.__init__(self, env)
+
+        self.train_queue = Queue(maxsize=32)
+
+        self.thread_model()
+
+    def thread_model(self):
+        self.model._make_predict_function()
+        self.model._make_train_function()
+        self.graph = tf.get_default_graph()
+
+    def stop(self):
+        print("stopping training thread.")
+        self.running = False
+
+    # training thread
+    def run(self):
+        print("starting training thread...")
+        self.running = True
+        while self.running:
+            batch = self.train_queue.get()
+            Agent.train(self, batch)
+
+    def train(self, batch):
+        self.train_queue.put(batch)
 
 if __name__ == "__main__":
     env = gym.make('Breakout-v4')
     env.frameskip = 4
 
-    agent = Agent(env)
+    agent = None
+    if MULTITHREADING:
+        agent = ThreadedAgent(env)
+        agent.start()
+    else:
+        agent = Agent(env)
 
     for e in range(EPISODES):
         done = False
@@ -289,11 +338,13 @@ if __name__ == "__main__":
         training_batch = sample + moves
         agent.train(training_batch)
 
-        print("episode: %03d\tsteps: %03d\tscore: %03d" % (e, steps, score))
+        print("episode: %05d\tsteps: %04d\tscore: %03d\tmemory: %06d\tepsilon: %.2f" % (e, steps, score, agent.memory_length(), agent.epsilon))
 
         # save the model every 1000 episodes
         if e % SAVE_EVERY_EPISODE == 0:
             print("saving model (%s)..." % MODEL_FILENAME)
             agent.model.save(MODEL_FILENAME)
 
+    if MULTITHREADING:
+        agent.stop()
     env.close()
