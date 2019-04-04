@@ -15,6 +15,7 @@ from queue import Queue
 import tensorflow as tf
 
 ##### breakout DQN
+start_timestamp = int(time.time())
 
 EPISODES = 10000            # number of episodes to play
 MEMORY_FRAMES = 8           # number of frames to stack
@@ -23,7 +24,7 @@ REPLAY_MEMORY = 20000       # amount of moves to remember in the replay memory
 FORCE_FIRE = True           # force the fire button to be pressed after dying
                             # if the model doesn't
 DEBUG = False               # set to True for lots of debug output
-MODEL_FILENAME = "dqn.%d.model.h5" % time.time()
+MODEL_FILENAME = "dqn.%d.model.h5" % start_timestamp
                             # filename to save the model to
 SAVE_EVERY_EPISODE = 100    # save the model every 100 episodes
 RENDER = True               # render the Atari window
@@ -31,6 +32,8 @@ MULTITHREADING = True       # use a background thread to do the training
                             # this will be faster, but you'll need to double
                             # CTRL+C to quit
 TRAINING_QUEUE_LENGTH = 32  # size of the batch fifo buffer
+CSV_LOG_FILENAME = "dqn.%d.csv" % start_timestamp
+                            # filename to log metrics to
 
 class Agent:
     def __init__(self, env):
@@ -280,6 +283,12 @@ if __name__ == "__main__":
     else:
         agent = Agent(env)
 
+    if CSV_LOG_FILENAME is not None:
+        # open csv log and write header
+        print("logging to '%s' ..." % CSV_LOG_FILENAME)
+        logf = open(CSV_LOG_FILENAME, 'w')
+        print("episode,steps,score,memory,epsilon", file=logf)
+
     for e in range(EPISODES):
         done = False
         score = 0
@@ -343,11 +352,19 @@ if __name__ == "__main__":
 
         print("episode: %05d\tsteps: %04d\tscore: %03d\tmemory: %06d\tepsilon: %.2f" % (e, steps, score, agent.memory_length(), agent.epsilon))
 
+        if CSV_LOG_FILENAME is not None:
+            print("%d,%d,%d,%d,%.2f" % (e, steps, score, agent.memory_length(), agent.epsilon), file=logf)
+            logf.flush()
+
         # save the model every 1000 episodes
         if e % SAVE_EVERY_EPISODE == 0:
             print("saving model (%s)..." % MODEL_FILENAME)
             agent.model.save(MODEL_FILENAME)
 
+    if CSV_LOG_FILENAME is not None:
+        logf.close()
+
     if MULTITHREADING:
         agent.stop()
+
     env.close()
